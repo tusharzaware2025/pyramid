@@ -48,11 +48,11 @@ The Release team will ensure that this runbook is attached to the relevant Relea
 | Layer | Dev / Test | Production |
 | --- | --- | --- |
 | Azure subscription | Separate non-production subscription(s) | Separate production subscription |
-| ADF | Dev/Test factory and linked services functional | Production factory to be promoted by CI/CD |
+| ADF | Dev/Test factory and linked services functional | First-time Production deployment. Production pipelines/triggers are not present yet and will be created by CI/CD with triggers disabled initially. |
 | SAP HANA connectivity | Functional through approved network path | Must be validated from production integration runtime/network path |
 | Azure Storage source | Functional from another subscription | Must validate cross-subscription access, firewall, identity, and Private Endpoint/DNS |
-| Snowflake | Dev/Test databases in same account | Production database in same account |
-| Snowflake data | Dev has full historical load; Test to be refreshed from Dev clone | Prod to be refreshed from validated clone path |
+| Snowflake | Dev/Test databases in same account | First-time Production database deployment. Production objects/data are not present yet. |
+| Snowflake data | Dev has full historical load; Test to be refreshed from Dev clone | Prod to be created from the approved Dev/Test clone path |
 | RBAC | Dev/Test functional | Prod RBAC to be synchronized after clone |
 | Azure Analysis Services | Separate Azure subscription, connected by Private Link | Production cube points to production Snowflake objects through Private Link |
 | Power BI | Functional via Azure Analysis Services | Validate reports through cube only; no direct Power BI-to-Snowflake access |
@@ -66,8 +66,9 @@ The Release team will ensure that this runbook is attached to the relevant Relea
 4. All connectivity checks must use production network paths, Private Link, production DNS resolution, firewall policy, and Zscaler policy.
 5. The Dev database is the source of the full historical data clone. The planned sequence is Dev to Test validation, then Prod creation/refresh after Test validation.
 6. RBAC must be applied after database clone because cloned database objects do not replace environment-level access governance requirements.
-7. Existing Production objects must be backed up or renamed before replacement.
-8. Every deployment command, pipeline run, clone statement, RBAC statement, and validation result must be logged with timestamp, executor, and evidence link.
+7. This is a first-time Production deployment. No existing Production Snowflake database objects or ADF production pipelines/triggers are expected. If unexpected Production assets are found, pause and confirm ownership before proceeding.
+8. Backout before go-live means disabling or removing newly deployed Production assets and not releasing reporting to users; there is no prior Production data pipeline to restore.
+9. Every deployment command, pipeline run, clone statement, RBAC statement, and validation result must be logged with timestamp, executor, and evidence link.
 
 # Section 1 - Implementation Plan
 
@@ -80,12 +81,12 @@ The Release team will ensure that this runbook is attached to the relevant Relea
 | Dev historical load complete | Dev Snowflake database contains full history and latest approved load | James | TBD |
 | Test validation complete | Test was cloned/refreshed from Dev and validated successfully | James | TBD |
 | Source systems stable | SAP HANA and Azure Storage source availability confirmed | James | TBD |
-| ADF release artifact approved | Production release artifact/version identified in CI/CD | Tushar | TBD |
-| Snowflake scripts approved | Clone, RBAC, grants, warehouse, task, stream, and validation scripts reviewed | Tushar | TBD |
-| Production Azure prerequisites ready | Production ADF, managed identities, key vault references, private endpoints, DNS, firewall rules ready | Tushar / Network Team | TBD |
+| ADF first Production release artifact approved | CI/CD artifact/version identified for initial Production pipeline deployment | Tushar | TBD |
+| Snowflake bootstrap scripts approved | Database clone/create, RBAC, grants, warehouse, and validation scripts reviewed | Tushar | TBD |
+| Production Azure prerequisites ready | Production ADF instance, managed identities, Key Vault references, private endpoints, DNS, and firewall rules ready | Tushar / Network Team | TBD |
 | Azure Analysis Services prerequisites ready | Production cube connection strings/credentials available and approved | Ajith | TBD |
 | Power BI validation users ready | Report testers identified and access available | Ajith | TBD |
-| Backout approval confirmed | Backout approach and decision authority confirmed | Release Manager / Change Owner | TBD |
+| First-time deployment backout approval confirmed | Stop/disable/remove-new-assets approach and decision authority confirmed | Release Manager / Change Owner | TBD |
 
 ## Implementation Steps
 
@@ -93,36 +94,29 @@ The Release team will ensure that this runbook is attached to the relevant Relea
 | --- | --- | --- | --- |
 | 1 | Open deployment bridge and confirm change approval, implementation window, participants, communication channel, and escalation path. | Release Manager / Change Owner | Record bridge details and attendees. |
 | 2 | Announce deployment start to stakeholders and place any dependent reporting or data refresh expectations on hold. | Release Manager / Change Owner | Communication sent. |
-| 3 | Confirm no conflicting ADF pipeline runs, Snowflake loads, cube refreshes, or Power BI refreshes are running in Dev, Test, or Prod. | James | Capture pipeline and query history screenshots/links. |
-| 4 | Confirm current production state before changes: Snowflake databases, schemas, warehouses, roles, users, integrations, stages, tasks, streams, network policies, resource monitors, and current row counts if Prod already exists. | Tushar | Export Snowflake metadata and validation output. |
-| 5 | Take backup/safety copy of existing production Snowflake database if it exists, for example by zero-copy clone to a timestamped backup database. | Tushar | Example: CREATE DATABASE PROD_DB_BKP_YYYYMMDDHH24MI CLONE PROD_DB; |
-| 6 | Suspend scheduled production jobs that could mutate target objects during deployment, including Snowflake tasks and ADF triggers. | Tushar | Record suspended jobs/triggers. |
-| 7 | Validate production Snowflake private connectivity from approved Azure production network path and Azure Analysis Services subscription path. | Network Team | Confirm Private Link endpoint, DNS resolution, routing, firewall, and Zscaler policy. |
-| 8 | Validate production ADF managed private endpoints, linked services, managed identity, Key Vault references, integration runtime, and firewall allow rules for SAP HANA, Azure Storage source, and Snowflake. | Tushar / Network Team | Linked service tests must pass. |
-| 9 | Confirm Dev Snowflake database is the approved historical source and has completed data reconciliation checks. | James | Capture reconciliation summary. |
-| 10 | Refresh Test from Dev using Snowflake zero-copy clone if not already refreshed for final validation. | Tushar | Example: CREATE OR REPLACE DATABASE TEST_DB CLONE DEV_DB; |
-| 11 | Run Test RBAC synchronization script for roles, grants, future grants, database roles if used, schema grants, warehouse grants, and object-level access. | Tushar | Save executed script/version and result. |
-| 12 | Execute engineering validation on Test after clone and RBAC: counts, min/max dates, duplicate checks, null critical fields, reconciliation totals, pipeline dry-run where applicable, and representative query checks. | James | Test validation evidence attached. |
-| 13 | Obtain go/no-go approval to proceed from Test validation to Production clone. | Release Manager / Change Owner with Tushar, James, Ajith, Network Team | Decision recorded. |
-| 14 | Prepare Production Snowflake deployment: confirm target database name, environment-specific parameters, warehouses, resource monitors, masking/row access policies if applicable, network policies, and ownership model. | Tushar | Parameter sheet attached. |
-| 15 | Create or replace Production database from approved source using Snowflake clone strategy. If the plan requires direct Dev-to-Prod clone, clone Prod from Dev after Test sign-off. If policy requires Test as release candidate, clone Prod from validated Test. | Tushar | Preferred examples: CREATE OR REPLACE DATABASE PROD_DB CLONE DEV_DB; or CREATE OR REPLACE DATABASE PROD_DB CLONE TEST_DB; |
-| 16 | Apply Production RBAC synchronization after clone: roles, database roles, grants, future grants, ownership grants, warehouse access, integration/stage access, service accounts, Azure Analysis Services service principal/user access, break-glass admin roles, and read-only reporting roles. | Tushar | RBAC execution log and grant validation queries. |
-| 17 | Validate Production Snowflake access using least-privilege test accounts/service principals for ADF, Azure Analysis Services cube, admin, engineering read, and reporting read roles. | Tushar / James | Record role-specific query evidence. |
-| 18 | Deploy ADF code to Production using CI/CD pipeline: ARM/Bicep/Terraform or ADF publish artifact as applicable, linked services, datasets, dataflows, pipelines, triggers disabled initially, global parameters, integration runtime references, and Key Vault references. | Tushar | CI/CD run URL and artifact version. |
-| 19 | Validate ADF production linked services without starting full production schedule: SAP HANA, Azure Storage source subscription, Snowflake, Key Vault, integration runtime, managed private endpoints. | Tushar / James / Network Team | All connection tests pass. |
-| 20 | Run controlled ADF smoke load for a limited dataset or approved validation pipeline into Production landing/staging objects. | James | Confirm load status and no duplicate/unexpected writes. |
-| 21 | Run Production data validation after smoke load: source-to-target counts, sample business keys, date range, audit columns, load control tables, error tables, rejected records, Snowflake query history, and warehouse usage. | James | Attach validation result. |
-| 22 | Enable production ADF triggers or schedules only after smoke validation approval. | Tushar | Trigger names and enabled timestamp recorded. |
-| 23 | Confirm production operational monitoring: ADF alerts, Snowflake resource monitors, task history, query failure alerts, data quality alerts, storage and Key Vault diagnostics, and runbook escalation contacts. | Tushar / James | Monitoring evidence attached. |
-| 24 | Update Azure Analysis Services cube connection to production Snowflake endpoint/database/schema/warehouse/role through Private Link. Confirm credentials are stored securely and not embedded in reports. | Ajith / Tushar / Network Team | Connection and credential evidence. |
-| 25 | Process or refresh the Azure Analysis Services cube against production Snowflake. | Ajith | Refresh/process job result. |
-| 26 | Validate Power BI reports through Azure Analysis Services only. Confirm no direct Power BI-to-Snowflake connection is used. | Ajith | Report screenshots, dataset lineage, and query validation. |
-| 27 | Execute business-facing report validation: filters, measures, totals, row-level security if applicable, latest refresh timestamp, and comparison to Test/UAT baseline. | Ajith / Business Tester | Evidence and sign-off captured. |
-| 28 | Confirm network production steady state: Private Link status, private DNS resolution, firewall logs, Zscaler logs, denied traffic review, and no public endpoint dependency. | Network Team | Network validation record. |
-| 29 | Confirm post-deployment Snowflake governance: production tags/classification if applicable, masking policies, row access policies, retention, time travel, fail-safe expectations, warehouse sizing, and cost guardrails. | Tushar | Governance checklist completed. |
-| 30 | Reconcile first production scheduled load after trigger enablement and confirm operational handover readiness. | James | First-run result and reconciliation summary. |
-| 31 | Announce implementation complete and move into post-deployment monitoring period. | Release Manager / Change Owner | Communication sent. |
-| 32 | Attach all evidence to change record: pipeline run IDs, Snowflake scripts, validation output, cube refresh result, Power BI test evidence, network checks, approvals, and sign-offs. | Release Manager / Change Owner | Change evidence complete. |
+| 3 | Confirm this is a first-time Production deployment: no existing Production Snowflake database/data objects and no existing Production ADF pipelines/triggers are expected. If any unexpected Production assets exist, pause and confirm ownership before continuing. | Tushar / James | Empty-state confirmation captured. |
+| 4 | Validate production Snowflake private connectivity from approved Azure production network path and Azure Analysis Services subscription path. | Network Team | Confirm Private Link endpoint, DNS resolution, routing, firewall, and Zscaler policy. |
+| 5 | Validate production ADF prerequisites: managed private endpoints, managed identity, Key Vault references, integration runtime, and firewall allow rules for SAP HANA, Azure Storage source, and Snowflake. | Tushar / Network Team | Prerequisite checks pass before code deployment. |
+| 6 | Confirm Dev Snowflake database is the approved historical source and has completed data reconciliation checks. | James | Capture reconciliation summary. |
+| 7 | Refresh Test from Dev using Snowflake zero-copy clone only if final Test validation is not already complete. | Tushar | Example: CREATE OR REPLACE DATABASE TEST_DB CLONE DEV_DB; |
+| 8 | Validate Test after clone/RBAC if Step 7 was executed: row counts, min/max dates, duplicate checks, rejected records, and representative business queries. | James | Test validation evidence attached. |
+| 9 | Obtain go/no-go approval to proceed to Production creation. | Release Manager / Change Owner with Tushar, James, Ajith, Network Team | Decision recorded. |
+| 10 | Prepare Production Snowflake parameters: target database name, schema names, warehouse name, role names, service accounts, and environment-specific variables. | Tushar | Parameter sheet attached. |
+| 11 | Create Production Snowflake database from the approved source using Snowflake clone strategy. Because Production is empty, use CREATE DATABASE rather than replacing an existing Production database. | Tushar | Example: CREATE DATABASE PROD_DB CLONE DEV_DB; or CREATE DATABASE PROD_DB CLONE TEST_DB; |
+| 12 | Apply Production RBAC after clone: required roles, grants, future grants, warehouse access, ADF service account access, Azure Analysis Services access, admin access, and reporting read-only access. | Tushar | RBAC execution log and grant validation queries. |
+| 13 | Validate Production Snowflake access for ADF, Azure Analysis Services cube, admin, engineering read, and reporting read roles. | Tushar / James | Record role-specific query evidence. |
+| 14 | Deploy ADF code to Production using CI/CD for the first time. Deploy linked services, datasets, dataflows, pipelines, global parameters, integration runtime references, and triggers in disabled state. | Tushar | CI/CD run URL and artifact version. |
+| 15 | Validate ADF production linked services without enabling schedules: SAP HANA, Azure Storage source subscription, Snowflake, Key Vault, integration runtime, and managed private endpoints. | Tushar / James / Network Team | All connection tests pass. |
+| 16 | Run one controlled/manual ADF smoke load or validation pipeline into Production landing/staging objects. | James | Confirm load status and no duplicate/unexpected writes. |
+| 17 | Run Production data validation after smoke load: source-to-target counts, sample business keys, date range, audit columns, load control tables, error tables, rejected records, Snowflake query history, and warehouse usage. | James | Attach validation result. |
+| 18 | Enable only the required production ADF triggers/schedules after smoke validation approval. | Tushar | Trigger names and enabled timestamp recorded. |
+| 19 | Configure basic production monitoring: ADF alerts, Snowflake query/load failure checks, warehouse/resource monitor checks, and support escalation contacts. | Tushar / James | Monitoring evidence attached. |
+| 20 | Update Azure Analysis Services cube connection to production Snowflake endpoint/database/schema/warehouse/role through Private Link. Confirm credentials are stored securely and not embedded in reports. | Ajith / Tushar / Network Team | Connection and credential evidence. |
+| 21 | Process or refresh the Azure Analysis Services cube against production Snowflake. | Ajith | Refresh/process job result. |
+| 22 | Validate Power BI reports through Azure Analysis Services only. Confirm no direct Power BI-to-Snowflake connection is used. | Ajith | Report screenshots, dataset lineage, and query validation. |
+| 23 | Execute business-facing report validation: filters, measures, totals, row-level security if applicable, latest refresh timestamp, and comparison to Test/UAT baseline. | Ajith / Business Tester | Evidence and sign-off captured. |
+| 24 | Confirm network production steady state: Private Link status, private DNS resolution, firewall logs, Zscaler logs, denied traffic review, and no public endpoint dependency. | Network Team | Network validation record. |
+| 25 | Announce implementation complete and attach evidence to the change record: CI/CD run, Snowflake clone/RBAC scripts, validation output, cube refresh result, Power BI evidence, network checks, approvals, and sign-offs. | Release Manager / Change Owner | Communication sent and evidence complete. |
 
 ## Production Cutover Checklist
 
@@ -130,7 +124,7 @@ The Release team will ensure that this runbook is attached to the relevant Relea
 | --- | --- | --- | --- |
 | Snowflake clone | Production database created/refreshed from approved Dev/Test source | Tushar | TBD |
 | Snowflake RBAC | Production access synchronized and validated | Tushar | TBD |
-| ADF deployment | CI/CD completed successfully | Tushar | TBD |
+| ADF first deployment | CI/CD completed successfully and triggers initially deployed disabled | Tushar | TBD |
 | ADF connectivity | SAP HANA, Azure Storage, Snowflake, Key Vault tests passed | James / Tushar | TBD |
 | ADF run | Smoke load and first scheduled load successful | James | TBD |
 | Network | Private Link, DNS, firewall, and Zscaler validated | Network Team | TBD |
@@ -146,7 +140,7 @@ Backout will be considered if one or more of the following occurs and cannot be 
 
 1. Production Snowflake clone fails or creates inconsistent production objects.
 2. RBAC sync fails and required service accounts or users cannot access production safely.
-3. ADF production deployment fails and cannot be rolled forward to a known good release.
+3. First Production ADF deployment fails and cannot be corrected during the change window.
 4. Production ADF cannot connect to SAP HANA, source Azure Storage, Key Vault, or Snowflake.
 5. Private Link, DNS, firewall, or Zscaler controls block production traffic and Network Team cannot remediate during the window.
 6. Azure Analysis Services cube cannot connect to production Snowflake.
@@ -155,30 +149,30 @@ Backout will be considered if one or more of the following occurs and cannot be 
 
 ## Backout Plan
 
+Because this is the first Production deployment, there is no previous Production Snowflake data pipeline, ADF trigger schedule, or Power BI production data path to restore. Backout means stopping the rollout, disabling newly created components, preventing user consumption, and cleaning up or quarantining newly created Production objects if required.
+
 | Step | Backout Plan Step | Implementer | Evidence / Notes |
 | --- | --- | --- | --- |
 | 1 | Declare backout decision on deployment bridge and record approver, reason, timestamp, and impacted component. | Release Manager / Change Owner | Decision logged. |
-| 2 | Stop or disable production ADF triggers and terminate any active production pipeline runs if safe to cancel. | Tushar / James | Trigger and run status captured. |
-| 3 | Suspend Snowflake tasks or scheduled jobs introduced during deployment. | Tushar | Task status captured. |
-| 4 | If Production Snowflake database was replaced, restore previous production database from timestamped backup clone or rename backup back to production name as per approved Snowflake procedure. | Tushar | Restore statement and validation output attached. |
-| 5 | If RBAC caused access issues, re-run previous known-good production RBAC script or restore grants from pre-deployment export. | Tushar | Grant validation output attached. |
-| 6 | Roll back ADF to previous production release through CI/CD pipeline or redeploy previous approved ARM/template artifact. | Tushar | CI/CD run URL and artifact version. |
-| 7 | Revert Azure Analysis Services cube connection to previous production database/connection if it was changed. | Ajith / Tushar | Connection validation output. |
-| 8 | Process/refresh cube only if required to restore previous report behavior. | Ajith | Refresh result captured. |
-| 9 | Validate Power BI reports through restored cube connection. | Ajith | Screenshots/test results attached. |
-| 10 | Validate network state is restored or unchanged: Private Link, DNS, firewall, and Zscaler rules. | Network Team | Network confirmation. |
-| 11 | Execute post-backout data and access validation: Snowflake object availability, row counts, service account access, ADF linked services, cube connection, and Power BI report access. | James / Tushar / Ajith | Validation evidence attached. |
-| 12 | Announce backout complete and provide known issues, next steps, and whether production is restored to pre-deployment state. | Release Manager / Change Owner | Communication sent. |
-| 13 | Attach backout evidence to change record and schedule defect/remediation review. | Release Manager / Change Owner | Change updated. |
+| 2 | Do not enable any remaining Production ADF triggers/schedules. If any were enabled, disable them immediately and cancel active runs if safe. | Tushar / James | Trigger and run status captured. |
+| 3 | Stop any in-progress cube refresh or report release activity. | Ajith | Cube/report status captured. |
+| 4 | Quarantine or drop newly created Production Snowflake database objects if the deployment is not accepted. Quarantine is preferred when evidence is needed for troubleshooting; drop is acceptable when approved by the change owner. | Tushar | Example quarantine: ALTER DATABASE PROD_DB RENAME TO PROD_DB_FAILED_YYYYMMDDHH24MI; |
+| 5 | Revoke or disable newly granted Production access for ADF, Azure Analysis Services, reporting, and engineering roles if Production is not going live. | Tushar | Grant cleanup evidence attached. |
+| 6 | Leave newly deployed ADF artifacts disabled, or delete them only if the deployment owner confirms cleanup is required. Because there was no previous Production pipeline, no prior ADF version needs to be restored. | Tushar | Disabled/deleted artifact evidence. |
+| 7 | Point Azure Analysis Services back to non-production baseline or leave the Production cube/report unpublished until the next deployment attempt. | Ajith / Tushar | Connection/publication status captured. |
+| 8 | Confirm Power BI users cannot consume failed or unapproved Production data. | Ajith | Workspace/report access status captured. |
+| 9 | Validate network rules remain in the intended private state and no temporary public access was introduced. | Network Team | Network confirmation. |
+| 10 | Announce backout complete, confirm Production is not live, and provide remediation/next-step summary. | Release Manager / Change Owner | Communication sent. |
+| 11 | Attach backout evidence to the change record. | Release Manager / Change Owner | Change updated. |
 
 ## Backout Exit Criteria
 
 | Check | Expected Result | Owner | Status |
 | --- | --- | --- | --- |
-| Production service restored | Prior production state available or deployment safely halted before go-live | Tushar | TBD |
-| ADF stable | Production triggers disabled or restored to previous version | James / Tushar | TBD |
-| Snowflake stable | Previous database and RBAC restored or confirmed unaffected | Tushar | TBD |
-| Reporting stable | Azure Analysis Services and Power BI available as per previous state | Ajith | TBD |
+| Production service not released | Failed/unapproved deployment safely halted before go-live | Release Manager / Change Owner | TBD |
+| ADF stable | Newly deployed Production triggers disabled and active runs stopped/cancelled if required | James / Tushar | TBD |
+| Snowflake stable | Newly created Production database quarantined/dropped or left inaccessible as approved | Tushar | TBD |
+| Reporting stable | Azure Analysis Services and Power BI not pointing users to failed/unapproved Production data | Ajith | TBD |
 | Network stable | No unintended public routing or blocked critical private traffic | Network Team | TBD |
 
 # Section 3 - Testing
@@ -290,10 +284,10 @@ Backout will be considered if one or more of the following occurs and cannot be 
 
 | Check | Enter Full Details |
 | --- | --- |
-| a. Any global risk when deployed to production systems during normal operational time? | Medium operational risk because this is the first production deployment and spans Azure, Snowflake, network, cube, and reporting layers. Mitigation: approved change window, bridge, backups, clone strategy, backout plan, and owner availability. |
+| a. Any global risk when deployed to production systems during normal operational time? | Medium operational risk because this is the first production deployment and spans Azure, Snowflake, network, cube, and reporting layers. Mitigation: approved change window, bridge, clone strategy, first-time deployment backout plan, and owner availability. |
 | b. Any risk on the production system after deployment, considering month-end or critical reporting cycles? | Confirm deployment does not overlap with month-end close, financial reporting, SAP HANA maintenance, storage maintenance, or Power BI executive reporting cycles. |
 | c. Impact on integrations? | Yes. ADF integrations with SAP HANA, Azure Storage source, Snowflake, Key Vault, and Azure Analysis Services reporting path must be validated. |
-| d. Data migration impact and risk? | Yes. Production will be initialized through Snowflake clone and then loaded by ADF. Risk is mitigated through Dev/Test validation, pre/post reconciliation, and backup clone. |
+| d. Data migration impact and risk? | Yes. Production will be initialized through Snowflake clone and then loaded by ADF. Risk is mitigated through Dev/Test validation, pre/post reconciliation, and the ability to disable or quarantine newly created Production assets before go-live. |
 | e. Successful pre-deployment checks completed? | TBD. Must be marked Yes only after all entry criteria and evidence are complete. |
 
 # Section 5 - Tier 1 Application Impact
@@ -347,11 +341,10 @@ Backout will be considered if one or more of the following occurs and cannot be 
 | Evidence Item | Owner | Attached |
 | --- | --- | --- |
 | Approved change record | Release Manager / Change Owner | TBD |
-| Snowflake pre-deployment metadata export | Tushar | TBD |
-| Snowflake backup clone evidence | Tushar | TBD |
+| Production empty-state confirmation | Tushar / James | TBD |
 | Dev/Test/Prod clone SQL and result | Tushar | TBD |
 | RBAC script and result | Tushar | TBD |
-| ADF CI/CD pipeline run | Tushar | TBD |
+| ADF CI/CD first Production deployment run | Tushar | TBD |
 | ADF linked service test results | James / Tushar | TBD |
 | SAP HANA source validation | James | TBD |
 | Azure Storage source validation | James | TBD |
